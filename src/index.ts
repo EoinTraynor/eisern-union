@@ -21,8 +21,15 @@ const login = async (page: puppeteer.Page) => {
 
 const navigateToGame = async (page: puppeteer.Page) => {
   await page.goto('https://tickets.union-zeughaus.de/unveu/1.-fc-union-berlin-rasenballsport-leipzig.htm');
-  await page.click('#CybotCookiebotDialogBodyButtonDecline');
+  if (await page.waitForSelector('#CybotCookiebotDialogBodyButtonDecline')) {
+    await page.click('#CybotCookiebotDialogBodyButtonDecline');
+  }
   await page.waitForNavigation();
+}
+
+const findTicket = async (page: puppeteer.Page) => {
+  await page.waitForSelector('.jsVenue');
+
 }
 
 (async () => {
