@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unused-vars */
 import * as puppeteer from "puppeteer";
 
 const initBrowser = async () => {
@@ -11,7 +12,32 @@ const initBrowser = async () => {
 const username = process.env.EMAIL;
 const password = process.env.PASSWORD;
 const baseUrl = 'https://tickets.union-zeughaus.de';
-const matchUrlPath = '1.-fc-union-berlin-glasgow-rangers.htm'
+const matchUrlPath = 'Veranstaltungen/3ea91f70-60c5-472c-b222-510b700f85fa';
+// const matchId = '534be454-f064-42f4-a434-8530d8ad4a48';
+
+declare global {
+  interface Window {
+    Synway: {
+      BaseUrl: () => string;
+      CurrentSub: string;
+      SynwayInitialized: boolean;
+    };
+    $0: {
+      jQuery3700413672318284486142: {
+        src: string;
+        venue: object,
+
+      }
+    };
+    $_: {
+      jQuery3700413672318284486142: {
+        src: string;
+        venue: object,
+
+      }
+    }
+  }
+}
 
 type AvailableTicket = {
   BlockID: string;
@@ -46,8 +72,7 @@ const login = async (page: puppeteer.Page) => {
 };
 
 const navigateToGame = async (page: puppeteer.Page) => {
-  console.log('navigateToGame');
-  await page.goto(`${baseUrl}/unveu/${matchUrlPath}`);
+  await page.goto(`${baseUrl}/unveu/venue/${matchUrlPath}`, { waitUntil: 'domcontentloaded' });
   if (await page.waitForSelector('#CybotCookiebotDialogBodyButtonDecline')) {
     await page.click('#CybotCookiebotDialogBodyButtonDecline');
   }
@@ -62,52 +87,6 @@ const isLoggedIn = async (page: puppeteer.Page) => {
   }
 }
 
-const purchaseTicket = async (page: puppeteer.Page, availableTickets: AvailableTicket[]) => {
-  console.log('purchaseTicket');
-  console.log(availableTickets);
-
-  const info = availableTickets[0];
-
-  await page.evaluate(async (info) => {
-
-    const myHeaders = new Headers({
-      "accept": "*/*",
-      "accept-language": "en-US,en;q=0.9",
-      "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-      "priority": "u=1, i",
-      "sec-ch-ua": "\"Not/A)Brand\";v=\"8\", \"Chromium\";v=\"126\", \"Brave\";v=\"126\"",
-      "sec-ch-ua-mobile": "?0",
-      "sec-ch-ua-platform": "\"Linux\"",
-      "sec-fetch-dest": "empty",
-      "sec-fetch-mode": "cors",
-      "sec-fetch-site": "same-origin",
-      "sec-gpc": "1",
-      "x-requested-with": "XMLHttpRequest",
-      "Referer": "https://tickets.union-zeughaus.de/unveu/1.-fc-union-berlin-glasgow-rangers.htm?langid=1",
-      "Referrer-Policy": "strict-origin-when-cross-origin"
-    });
-    // TODO: Replace MatchID
-    const matchId = '114a1a9d-baa4-47c3-9157-782222e5536e';
-    const response = await fetch(`https://tickets.union-zeughaus.de/unveu/SynwayVenue/BookTicket/Veranstaltungen2/${matchId}`, {
-      method: "POST",
-      headers: myHeaders,
-      body: JSON.stringify({
-        "Count": 1,
-        "BlockID": info.BlockID,
-        "ResellingID": '',
-        "ZD": '',
-        "id": matchId,
-        "SubName": 'Veranstaltungen',
-      })
-    });
-    const text = await response.text();
-    console.log({text});
-    return text;
-  }, info);
-}
-
-const createRequest = () => {}
-
 (async () => {
   const browser = await initBrowser();
   const page = await browser.newPage();
@@ -119,7 +98,7 @@ const createRequest = () => {}
     const availableTickets: AvailableTicket[] = [];
     page.on('response', async response => {
       const url = await response.url();
-      if (url.startsWith('https://tickets.union-zeughaus.de/unveu/SynwayVenue/Prices/Veranstaltungen/')) {
+      if (url.startsWith('https://tickets.union-zeughaus.de/unveu/SynwayVenue/Prices/Veranstaltungen')) {
         const json = await response.json();
         const jsonData: AvailableTicket = json.data;
         const isSeatedSection = () => jsonData.BlockName === null;
@@ -131,6 +110,25 @@ const createRequest = () => {}
     });
 
     await navigateToGame(page);
-    await purchaseTicket(page, availableTickets);
+
+    await page.waitForFunction(`
+      Object.keys(
+        document.querySelector("canvas")
+      ).some(k => k.startsWith("jQuery"))
+    `);
+
+    const data = await page.$eval("canvas", el => {
+      const {isEventSeries, needsDateAndTime, src, selectedEvent} =
+      // @ts-expect-error fsaldj
+        Object.entries(el).find(([k, v]) => {
+          console.log({k, v});
+          return k.startsWith("jQuery")
+        }
+        )[1];
+      return {isEventSeries, needsDateAndTime, src, selectedEvent};
+    });
+
+    console.log(data);
+
     await browser.close();
 })();
