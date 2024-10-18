@@ -12,7 +12,7 @@ const initBrowser = async () => {
 const username = process.env.EMAIL;
 const password = process.env.PASSWORD;
 const baseUrl = 'https://tickets.union-zeughaus.de';
-const matchUrlPath = 'Veranstaltungen/3ea91f70-60c5-472c-b222-510b700f85fa';
+const matchUrlPath = 'Veranstaltungen/e51be730-d9cb-4ff7-a1e9-29c3203a2f20';
 // const matchId = '534be454-f064-42f4-a434-8530d8ad4a48';
 
 declare global {
@@ -117,15 +117,30 @@ const isLoggedIn = async (page: puppeteer.Page) => {
       ).some(k => k.startsWith("jQuery"))
     `);
 
-    const data = await page.$eval("canvas", el => {
-      const {isEventSeries, needsDateAndTime, src, selectedEvent} =
+    const data = await page.$eval("canvas", async el => {
+      const jQuery =
       // @ts-expect-error fsaldj
         Object.entries(el).find(([k, v]) => {
-          console.log({k, v});
           return k.startsWith("jQuery")
         }
         )[1];
-      return {isEventSeries, needsDateAndTime, src, selectedEvent};
+      const { venue } = jQuery;
+      const { SubName, VID, BookTicket } = venue;
+      const { Blocks = [] } = venue.Venue;
+      const bookableBlocks = Blocks.filter((block: {Blocked: boolean }) => block.Blocked === false);
+      // Background color may indicate if it's possible to purchase a ticket in that block.
+      const { CurrentResellingId, ID, BackgroundColor, FullName, ShortName} = bookableBlocks[0];
+      const payload = {
+        "Count": 1,
+        "BlockID": ID, // BlockID
+        "ResellingID": CurrentResellingId,
+        "ZD": "",
+        "id": VID, // MatchID
+        "SubName": SubName,
+      }
+      await jQuery.venue.BookTicket(payload)
+
+      return { payload, BookTicket: jQuery.venue.BookTicket };
     });
 
     console.log(data);
