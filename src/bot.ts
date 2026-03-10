@@ -1,133 +1,142 @@
+/* eslint-disable no-console */
 import * as path from 'path';
 import { chromium } from 'playwright';
 import { sendTelegramNotification } from './notifier';
 
-const matchUrl = 'https://tickets.union-zeughaus.de/unveu/1.-fc-union-berlin-sv-werder-bremen_4.htm';
+const matchUrl =
+  'https://tickets.union-zeughaus.de/unveu/1.-fc-union-berlin-sv-werder-bremen_4.htm';
 const baseUrl = 'https://tickets.union-zeughaus.de';
-// Define a folder to store your browser profile
 const userDataDir = path.join(__dirname, '../user_data');
 
-/**
- * Generates a random delay between a min and max value.
- * @param min Minimum milliseconds
- * @param max Maximum milliseconds
- */
 const getRandomDelay = (min: number, max: number) =>
-    Math.floor(Math.random() * (max - min + 1) + min);
+  Math.floor(Math.random() * (max - min + 1) + min);
 
-async function startBot() {
-    console.log("🦅 Eisern Union Sniper Bot: Persistent Session Mode");
+async function startZweitmarktSniper() {
+  // eslint-disable-next-line no-console
+  console.log('🦅 Eisern Union Zweitmarkt Sniper Active...');
 
-    // Launch with a persistent data directory
-    const context = await chromium.launchPersistentContext(userDataDir, {
-        headless: false,
-        viewport: { width: 1280, height: 720 }
-    });
+  const context = await chromium.launchPersistentContext(userDataDir, {
+    headless: false,
+    viewport: { width: 1280, height: 720 },
+  });
 
-    const page = context.pages().length > 0 ? context.pages()[0] : await context.newPage();
+  const page = context.pages()[0] || (await context.newPage());
 
-    // 1. Check Login State
-    await page.goto(`${baseUrl}/unveu/profis-maenner.htm`);
+  // 1. Initial Login Check
+  await page.goto(`${baseUrl}/unveu/profis-maenner.htm`);
+  if (await page.locator('a[href*="RedirectToSso=1"]').first().isVisible()) {
+    // eslint-disable-next-line no-console
+    console.log('🚨 Login required...');
+    await page.goto(`${baseUrl}/unveu/data?RedirectToSso=1`);
+    await page.waitForURL(/tickets\.union-zeughaus\.de\/unveu/, { timeout: 0 });
+  }
 
-    // Check if we see a 'Login' link or the 'Logout' link
-    const isLoggedOut = await page.locator('a[href*="RedirectToSso=1"]').first().isVisible();
+  let ticketInBasket = false;
+  // const venueDataUrl = 'https://tickets.union-zeughaus.de/unveu/SynwayVenue/VenueData/Veranstaltungen/52370706-591c-4cde-98a7-527d0b0f370f';
 
-    if (isLoggedOut) {
-        console.log("🚨 Session expired or not found. Please log in manually ONCE...");
-        await page.goto(`${baseUrl}/unveu/data?RedirectToSso=1`);
-        // The bot will wait here until you successfully log in and the URL changes
-        await page.waitForURL(/tickets\.union-zeughaus\.de\/unveu/, { timeout: 0 });
-        console.log("✅ Login successful and saved to user_data folder!");
-    } else {
-        console.log("🚀 Existing session found! Skipping login...");
-    }
+  // 1. First, navigate once to the page to initialize the venue object
+  await page.goto(matchUrl, { waitUntil: 'domcontentloaded' });
 
-    let ticketInBasket = false;
-    let attemptCount = 0;
+  while (!ticketInBasket) {
+    // eslint-disable-next-line no-console
+    console.log(`[${new Date().toLocaleTimeString()}] ⚡ Turbo Polling API...`);
 
-    while (!ticketInBasket) {
-        attemptCount++;
-        // Generate a fresh random delay for THIS specific cycle
-        const currentDelay = getRandomDelay(6000, 12000);
+    // Combine your variables into a single object
+    const options = {
+      apiUrl:
+        'https://tickets.union-zeughaus.de/unveu/SynwayVenue/VenueData/Veranstaltungen/52370706-591c-4cde-98a7-527d0b0f370f',
+      targetSektors: ['SEKTOR 2', 'SEKTOR 3', 'SEKTOR 4'],
+    };
 
-        console.log(`\n--- [Attempt #${attemptCount}] ${new Date().toLocaleTimeString()} ---`);
+    const result = await page.evaluate(async ({ apiUrl, targetSektors }) => {
+      try {
+        const response = await fetch(apiUrl);
+        const data = await response.json();
 
-        try {
-            await page.goto(matchUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        if (!data?.Blocks) return { status: 'retry', msg: 'No data' };
 
-            const result = await Promise.race([
-                page.waitForSelector('canvas', { timeout: 5000 }).then(() => 'LIVE'),
-                page.waitForSelector('.event-status-container', { timeout: 5000 }).then(() => 'WAIT')
-            ]);
-
-            if (result === 'WAIT') {
-                console.log(`ℹ️ STATUS: Tickets not live. Human-like pause: ${(currentDelay / 1000).toFixed(1)}s`);
-                await page.waitForTimeout(currentDelay);
-                continue;
-            }
-
-            console.log("🚀 ALERT: CANVAS DETECTED!");
-
-            const success = await page.evaluate(async () => {
-                const canvas = document.querySelector("canvas");
-                // @ts-expect-error accessing DOM internals
-                const jQueryKey = Object.keys(canvas).find(k => k.startsWith("jQuery"));
-                if (!jQueryKey) return { status: 'error', message: 'jQuery not found' };
-
-                // @ts-expect-error accessing DOM internals
-                const { venue } = canvas[jQueryKey];
-                if (!venue?.Venue?.Blocks) return { status: 'loading', message: 'Data loading...' };
-
-                const bookableBlocks = venue.Venue.Blocks.filter((b: any) => {
-                    // Filter logic derived from venue-data.json
-                    return !b.Blocked &&
-                           parseInt(b.FreeCapacity || "0") > 0 &&
-                           ["SEKTOR 2", "SEKTOR 3", "SEKTOR 4"].includes(b.Stand?.toUpperCase());
-                });
-
-                if (bookableBlocks.length === 0) return { status: 'empty', message: 'No targets available' };
-
-                const target = bookableBlocks[0];
-                await venue.BookTicket({
-                    "Count": 1,
-                    "BlockID": target.ID,
-                    "ResellingID": target.CurrentResellingId,
-                    "ZD": "",
-                    "id": venue.VID,
-                    "SubName": venue.SubName,
-                });
-                return { status: 'success', message: `Carted ${target.FullName}` };
-            });
-
-            if (success.status === 'success') {
-                console.log(`✅ ${success.message}`);
-                ticketInBasket = true;
-
-                // Send the alert to your phone!
-                await sendTelegramNotification(
-                    `🎯 *Eisern Bot Success!*\n` +
-                    `🎟️ Ticket secured: ${success.message}\n` +
-                    `🛒 [Click here to Checkout](${baseUrl}/unveu/ShoppingCart)`
-                );
-            } else {
-                console.log(`Label: ${success.message}. Randomizing next retry...`);
-                await page.waitForTimeout(currentDelay);
-            }
-
-        } catch (error) {
-            const errorMsg = error.message.split('\n')[0];
-            console.error(`⚠️ NETWORK ERROR: ${errorMsg}`);
-            // Add jitter to the error cooldown too
-            const errorCooldown = getRandomDelay(10000, 15000);
-            console.log(`Cooling down for ${(errorCooldown / 1000).toFixed(1)}s...`);
-            await page.waitForTimeout(errorCooldown);
+        interface Block {
+          Stand: string;
+          CurrentResellingId: string | null;
+          ID: string;
+          FullName: string;
         }
+
+        // Sniper logic using targetSektors from our wrapped object
+        const target = data.Blocks.find((b: Block) => {
+          const isTargetSektor = targetSektors.includes(b.Stand?.toUpperCase());
+          const hasResale = b.CurrentResellingId !== null;
+          return isTargetSektor && hasResale;
+        });
+
+        if (!target) return { status: 'retry', msg: 'Zweitmarkt empty' };
+
+        // Attempt booking
+        const canvas = document.querySelector('canvas');
+        if (!canvas) {
+          return { status: 'retry', msg: 'Canvas not found' };
+        }
+        const jQueryKey = Object.keys(canvas).find((k) =>
+          k.startsWith('jQuery')
+        );
+        if (!jQueryKey) {
+          return { status: 'retry', msg: 'jQuery key not found on canvas' };
+        }
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { venue } = (canvas as any)[jQueryKey];
+
+        const bookResponse = await venue.BookTicket({
+          Count: 1,
+          BlockID: target.ID,
+          ResellingID: target.CurrentResellingId,
+          ZD: '',
+          id: venue.VID,
+          SubName: venue.SubName,
+        });
+
+        return {
+          status: 'success',
+          block: target.FullName,
+          response: bookResponse,
+        };
+      } catch (e) {
+        if (e instanceof Error) {
+          return { status: 'error', msg: e.message };
+        }
+        return { status: 'error', msg: 'An unknown error occurred' };
+      }
+    }, options);
+
+    if (result.status === 'success') {
+      // Check if the server actually gave us the ticket
+      if (result.response && result.response.error) {
+        // eslint-disable-next-line no-console
+        console.log(`❌ FAIL: ${result.response.error}`); // "Someone was faster"
+      } else {
+        // eslint-disable-next-line no-console
+        console.log(`🎯 BOOM! Carted ${result.block}!`);
+        ticketInBasket = true;
+        await sendTelegramNotification(
+          `🎯 *TURBO HIT!*\n${result.block} secured!`
+        );
+        process.stdout.write('\x07');
+      }
     }
 
-    // 4. Success
-    process.stdout.write('\x07');
-    await page.goto(`${baseUrl}/unveu/ShoppingCart`);
-    console.log("🚨 CHECKOUT NOW! 🚨");
+    // Extremely short randomized jitter for Turbo Mode
+    await page.waitForTimeout(getRandomDelay(500, 1500));
+
+    // Auto-dismiss any "Faster than you" modals if they pop up
+    const modal = page.locator('.modal-dialog');
+    if (await modal.isVisible()) {
+      await page.keyboard.press('Escape');
+    }
+  }
+
+  await page.goto(`${baseUrl}/unveu/ShoppingCart`);
+  // eslint-disable-next-line no-console
+  console.log('🚨 FINISH CHECKOUT MANUALLY NOW! 🚨');
 }
 
-startBot().catch(console.error);
+// eslint-disable-next-line no-console
+startZweitmarktSniper().catch(console.error);
